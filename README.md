@@ -5,15 +5,18 @@ Based on the video series of [One Lone Coder](https://www.youtube.com/watch?v=tg
 
 ### Install
 
-    ```
-    pip install git+https://github.com/Chum4k3r/synther.git
-    ```
+One can install directly from GitHub:
+```
+pip install git+https://github.com/Chum4k3r/synther.git
+```
 
 ### Run
 
-    ```
-    python -m synther
-    ```
+Then just run the module with your Python interpreter:
+
+```
+python -m synther
+```
 
 ------------------------------
 
