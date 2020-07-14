@@ -5,13 +5,13 @@ Based on the video series of [One Lone Coder](https://www.youtube.com/watch?v=tg
 
 ### Install
 
-    ```shell
+    ```
     pip install git+https://github.com/Chum4k3r/synther.git
     ```
 
 ### Run
 
-    ```shell
+    ```
     python -m synther
     ```
 
