@@ -107,6 +107,4 @@ Use ESC to quit.
 
 
 ml = _MainLoop()
-
-# if __name__ == '__main__':
-sys.exit(ml(osctype='square'))
+sys.exit(ml(osctype='sine', samplerate=44100, blocksize=256, deviceid=(11, 10), nchannels=2, dtype='float32', clip_off=True))
