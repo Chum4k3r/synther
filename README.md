@@ -10,7 +10,7 @@ One can install directly from GitHub:
 pip install git+https://github.com/Chum4k3r/synther.git
 ```
 
-### Run
+### Running
 
 Then just run the module with your Python interpreter:
 
