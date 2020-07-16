@@ -235,17 +235,17 @@ class Synthesizer:
         self.blocksize = blocksize
 
         timeDelta = (self.blocksize-1)/self.samplerate
-        self.timeSpace = _np.linspace(0, timeDelta, self.blocksize)
+        self.timeVec = _np.linspace(0, timeDelta, self.blocksize)
         return
 
-    def get_samples(self, time, nchannels):
-        dTime = self.timeSpace + time
-        output = _np.zeros((dTime.shape[0], nchannels))
+    def get_samples(self, time: float, nchannels: int):
+        timeSpace = self.timeVec + time
+        output = _np.zeros((timeSpace.shape[0], nchannels))
         removes = []
         self.notesFree.clear()
         for name, note in self.notes.items():
             for ch in range(nchannels):
-                output[:, ch] += self.instruments[note.channel].sound(dTime, note)
+                output[:, ch] += self.instruments[note.channel].sound(timeSpace, note)
             if note.finished:
                 removes.append(name)
         self.notesFree.set()
@@ -292,7 +292,7 @@ Use ESC to quit.
     no_key = ' '
 
     def __init__(self, amplitude: float = 0.5, samplerate: int = 44100,
-                 blocksize: int = 512):
+                 blocksize: int = 2205):
         super().__init__(amplitude, samplerate, blocksize)
         return
 
@@ -321,7 +321,7 @@ Use ESC to quit.
         return 0
 
     def print_func(self):
-        print(f'\rLatency: {1e3*self.stream.latency:.3f} ms. Notes playing: {len(self.notes)}.', end='\r')
+        print(f'\rNotes playing: {len(self.notes)}. {self.no_key: <12}', end='\r')
         return
 
     def callback(self, outdata, frames, stime, status):
