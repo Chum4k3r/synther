@@ -8,7 +8,7 @@ Created on Tue Jul 14 01:08:04 2020
 from setuptools import setup
 
 setup(name='Synther',
-      version='0.1.0a',
+      version='0.1.0b',
       description='Simple command line sound synthesizer.',
       url='https://github.com/Chum4k3r/synther.git',
       author='João Vitor Gutkoski Paes',
