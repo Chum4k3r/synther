@@ -605,4 +605,4 @@ if __name__ == '__main__':
 
     app = Synther(loadTime, instrument)
 
-    sys.exit(app(deviceid=0))
+    sys.exit(app())
