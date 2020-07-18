@@ -10,14 +10,17 @@ import numpy as _np
 import numba as _nb
 import multiprocessing as _mp
 import sounddevice as _sd
+# import soundcard as _sc
+import time as _time
 from pynput import keyboard as _kb
 
 
 __all__ = ['Synthesizer', 'Envelope', 'Note', 'Harmonica', 'Bell', 'Instrument']
 
 
-# %% API
+_load_begin = _time.time()
 
+# %% API
 
 class Note:
     """Notes interface."""
@@ -38,7 +41,7 @@ class Note:
 
     _octaveRange = range(9)
 
-    def __init__(self, name: str, timeOn: float = 0.0, channel: int = 0):
+    def __init__(self, name: str, instrument: str, timeOn: float):
         """
         Represent a note being played, have a frequency and a name.
 
@@ -56,18 +59,18 @@ class Note:
         None.
 
         """
-        self.name = str(name).upper()
+        self.name = name
+        self.instrument = instrument  # something like midi channel
         self.timeOn = timeOn  # time started
-        self.channel = channel  # something like midi channel
         self.timeOff: float = 0.0  # time stopped
         self.freq: float = self._get_note_freq(self.name)
         self._finished = _mp.Event()
         return
 
     def __repr__(self):
-        return f"Note({str(self.name)}, self.timeOn, self.channel)"
+        return f"Note({str(self.name)}, {self.instrument}, {self.timeOn})"
 
-    def _get_note_freq(self, noteName: str = 'C0') -> float:
+    def _get_note_freq(self, noteName: str) -> float:
         totalDemitones = 0
 
         # note
@@ -225,38 +228,76 @@ class Harmonica(Instrument):
 
 
 class Synthesizer:
-    def __init__(self, amplitude: float, samplerate: int, blocksize: int):
-        self.instruments = {1: Bell(), 2: Harmonica()}
-        self.notes = {}
-        self.notesFree = _mp.Event()
-        self.notesFree.set()
+    """A synthesizer."""
 
+    instruments = {'bell': Bell(), 'harmonica': Harmonica()}
+
+    def __init__(self, samplerate: int, blocksize: int, nchannels: int, instrument: str):
         self.samplerate = samplerate
         self.blocksize = blocksize
+        self.nchannels = nchannels
 
-        timeDelta = (self.blocksize-1)/self.samplerate
-        self.timeVec = _np.linspace(0, timeDelta, self.blocksize)
+        self.instrument = instrument
+
+        self.playingNotes = {}
+        self.freeToAddNotes = _mp.Event()
+        self.freeToAddNotes.set()
+
+        _timeDelta = (self.blocksize-1)/self.samplerate
+        self.timeSpace = _np.linspace(0., _timeDelta, self.blocksize, dtype='float32')
+
+        self.initTime = _time.time()
         return
 
-    def get_samples(self, time: float, nchannels: int):
-        timeSpace = self.timeVec + time
-        output = _np.zeros((timeSpace.shape[0], nchannels))
-        removes = []
-        self.notesFree.clear()
-        for name, note in self.notes.items():
-            for ch in range(nchannels):
-                output[:, ch] += self.instruments[note.channel].sound(timeSpace, note)
+    @property
+    def time(self):
+        return _time.time() - self.initTime
+
+    def get_samples(self):
+        # Generate a time interval and allocate memory for the output
+        timeSpace = self.timeSpace + self.time
+        output = _np.zeros((self.blocksize, self.nchannels))
+
+        finishedNotes = []  # Helper list to now which notes are finished
+
+        self.freeToAddNotes.clear()  # prevent .add_note() modify the playingNotes dict
+        for name, note in self.playingNotes.items():
+            for ch in range(self.nchannels):
+                # channels are manually filled because instruments
+                # generates their sound as a 1d array
+                # otherwise the nchannels information would have to
+                # travel to the base _oscilator function.
+                output[:, ch] += self.instruments[note.instrument].sound(timeSpace, note)
             if note.finished:
-                removes.append(name)
-        self.notesFree.set()
-        [self.notes.pop(name) for name in removes]
+                finishedNotes.append(name)
+        self.freeToAddNotes.set()    # notes can be added again.
+
+        # Remove finished notes
+        [self.playingNotes.pop(name) for name in finishedNotes]
         return output
 
+    def add_note(self, noteName: str):
+        if noteName not in self.playingNotes:
+            # Note is not beying played
+            note = Note(noteName, self.instrument, self.time)
+            self.freeToAddNotes.wait()  # wait untill it is safe to modify the playingNotes dict
+            self.playingNotes[noteName] = note
+        else:
+            # Note is playing
+            note = self.playingNotes[noteName]
+            if note.timeOff > note.timeOn:
+                # note has been played again during release phase.
+                note.timeOn = self.time
+        return
 
-class _App(Synthesizer):
+    def register_note_timeoff(self, noteName: str):
+        if noteName in self.playingNotes:
+            self.playingNotes[noteName].timeOff = self.time
+        return
 
-    FPS = 30
-    msPF = int(_np.ceil(1000/FPS))
+
+
+class Synther(Synthesizer):
 
     statuses = []
     keysPressed = []
@@ -266,16 +307,54 @@ class _App(Synthesizer):
     finished = _mp.Event()
 
     # TODO: Improve key map, add transposing
-    key_map = {'z': 'C3', 's': 'C#3', 'x': 'D3', 'd': 'D#3',
-               'c': 'E3', 'v': 'F3', 'g': 'F#3', 'b': 'G3',
-               'h': 'G#3', 'n': 'A3', 'j': 'A#3', 'm': 'B3',
-               ',': 'C4', 'e': 'C4', '4': 'C#4', 'r': 'D4',
-               '5': 'D#4', 't': 'E4', 'y': 'F4', '7': 'F#4',
-               'u': 'G4', '8': 'G#4', 'i': 'A4', '9': 'A#4',
-               'o': 'B4', 'p': 'C5'}
+    noteFromKey = {'z': 'C3', 's': 'C#3', 'x': 'D3', 'd': 'D#3',
+                   'c': 'E3', 'v': 'F3', 'g': 'F#3', 'b': 'G3',
+                   'h': 'G#3', 'n': 'A3', 'j': 'A#3', 'm': 'B3',
+                   ',': 'C4', 'e': 'C4', '4': 'C#4', 'r': 'D4',
+                   '5': 'D#4', 't': 'E4', 'y': 'F4', '7': 'F#4',
+                   'u': 'G4', '8': 'G#4', 'i': 'A4', '9': 'A#4',
+                   'o': 'B4', 'p': 'C5'}
 
-    welcome = """
+    _instance = None
+    no_key = ' '
+
+    def __init__(self, loadTime: float, instrument: str, samplerate: int = 44100,
+                 blocksize: int = 1536, nchannels: int = 2, FPS: int = 30):
+        super().__init__(samplerate, blocksize, nchannels, instrument)
+        self.msPF = int(_np.ceil(1000/FPS))
+        self.loadTime = loadTime
+        return
+
+    def __call__(self, deviceid: list = _sd.default.device,
+                 dtype: _np.dtype or str = 'float32', **kwargs):
+        from platform import system
+        if system() == 'Windows':
+            kwargs['extra_settings'] = _sd.WasapiSettings(True)
+
+        with _sd.OutputStream(self.samplerate, self.blocksize, deviceid,
+                              self.nchannels, dtype, latency='low', callback=self.callback,
+                              finished_callback=self.callback_end, **kwargs) as stream:
+
+            with _kb.Listener(on_press=self.key_press, on_release=self.key_release,
+                              supress=True) as keys:
+
+                print(self.welcome())
+                while stream.active:
+                    _sd.sleep(self.msPF)
+                    if self.stopStream.is_set():
+                        break
+                    print(f'\rNotes playing: {len(self.playingNotes)}. CPU usage: {stream.cpu_load * 100:.2f}%{self.no_key: <12}', end='\r')
+                keys.join()
+
+        self.finished.wait()
+        print()
+        print("Goodbye!")
+        return 0
+
+    def welcome(self):
+        message = f"""
 Welcome to the Synther!
+It took {self.loadTime:.3f} s to start.
 Play using any of the following keys
 
    C3                          C4                          C5
@@ -287,51 +366,15 @@ Play using any of the following keys
 
 Use ESC to quit.
 """
-
-    _instance = None
-    no_key = ' '
-
-    def __init__(self, amplitude: float = 0.5, samplerate: int = 44100,
-                 blocksize: int = 2205):
-        super().__init__(amplitude, samplerate, blocksize)
-        return
-
-    def __call__(self, deviceid: list = _sd.default.device,
-                 nchannels: int = 1, dtype: _np.dtype or str = 'float32',
-                 **kwargs):
-        from platform import system
-        if system() == 'Windows':
-            kwargs['extra_settings'] = _sd.WasapiSettings(True)
-
-        with _sd.OutputStream(self.samplerate, self.blocksize, deviceid,
-                          nchannels, dtype, latency='low', callback=self.callback,
-                          finished_callback=self.callback_end,
-                          **kwargs) as self.stream:
-            with _kb.Listener(on_press=self.key_press,
-                             on_release=self.key_release,
-                             supress=True) as keys:
-                print(self.welcome)
-                while self.stream.active:
-                    _sd.sleep(self.msPF)
-                    self.print_func()
-                keys.join()
-        self.finished.wait()
-        print()
-        print("Goodbye!")
-        return 0
-
-    def print_func(self):
-        print(f'\rNotes playing: {len(self.notes)}. {self.no_key: <12}', end='\r')
-        return
+        return message
 
     def callback(self, outdata, frames, stime, status):
-        outdata[:] = self.get_samples(self.stream.time, self.stream.channels)
+        outdata[:] = self.get_samples()
         if status:
             self.statuses.append(status)
         if self.stopStream.is_set():
             raise _sd.CallbackStop
         return
-
 
     def callback_end(self):
         if len(self.statuses) >= 1:
@@ -348,35 +391,24 @@ Use ESC to quit.
             self.stopStream.set()
             return False
         else:
-            if key.char not in self.key_map:
+            if key.char not in self.noteFromKey:
                 return
             if key.char not in self.keysPressed:
-                noteName = self.key_map[key.char]
-                if noteName not in self.notes:
-                    note = Note(noteName, self.stream.time, 1)
-                    self.notesFree.wait()
-                    self.notes[noteName] = note
-                else:
-                    note = self.notes[noteName]
-                    if note.timeOff > note.timeOn:
-                        note.timeOn = self.stream.time
+                self.add_note(self.noteFromKey[key.char])
                 self.keysPressed.append(key.char)
         return
 
     def key_release(self, key):
         if type(key) is _kb.Key:
             return
-        elif key.char not in self.key_map:
+        elif key.char not in self.noteFromKey:
             return
-        noteName = self.key_map[key.char]
-        if noteName in self.notes:
-            self.notes[noteName].timeOff = self.stream.time
+        self.register_note_timeoff(self.noteFromKey[key.char])
         self.keysPressed.remove(key.char)
         return
 
 
 # %% NUMBA COMPILED STUFF
-
 
 _ts = _np.linspace(0, 64/44100, 64)  # a time interval
 
@@ -386,7 +418,7 @@ def _omega(freq: float) -> float:
     """Returns the angular frequency in rad/s for a given `freq` in Hertz."""
     return 2*_np.pi*freq
 
-# _ = _omega(1.)                   # compiles on _oscilator call
+_ = _omega(1.)                   # compiles on _oscilator call
 
 
 @_nb.njit
@@ -404,7 +436,7 @@ def _oscilator(oscType: str, freq: float, timeSpace: _np.ndarray,
     """
     Generate samples of an `oscType` wave form, for a given `timeSpace`.
 
-    The amount of samples is equal to `timeSpace.shape[0]`. The possible values of `oscType`s are:
+    The amount of samples is equal to `timeSpace.shape`. The possible values of `oscType`s are:
 
         * 'sine'
         * 'square'
@@ -463,7 +495,12 @@ def _oscilator(oscType: str, freq: float, timeSpace: _np.ndarray,
 
     return out
 
-# _ = _oscilator('warmsaw', _np.pi, _ts)  # compile on instrument sound
+_ = _oscilator('sine', _np.pi, _ts)  # compile on instrument sound
+_ = _oscilator('square', _np.pi, _ts)  # compile on instrument sound
+_ = _oscilator('triangle', _np.pi, _ts)  # compile on instrument sound
+_ = _oscilator('warmsaw', _np.pi, _ts)  # compile on instrument sound
+_ = _oscilator('sawtooth', _np.pi, _ts)  # compile on instrument sound
+_ = _oscilator('noise', 0., _ts)  # compile on instrument sound
 
 
 @_nb.njit
@@ -544,7 +581,7 @@ _ = _harmonica_sound(_ts, 1., 0.1)  # compile
 @_nb.njit(parallel=True)
 def _bell_sound(timeSpace: _np.ndarray, freq: float, timeOn: float):
     """Compiled function to generate a Bell sound based on wave addition."""
-    som = (1. * _oscilator('sine', 2*freq, timeSpace, 5., 0.005)
+    som = (1. * _oscilator('sine', 2*freq, timeSpace)
            + 0.5 * _oscilator('sine', 3*freq, timeSpace)
            + 0.25 * _oscilator('sine', 4*freq, timeSpace))
     return som
@@ -552,16 +589,20 @@ def _bell_sound(timeSpace: _np.ndarray, freq: float, timeOn: float):
 _ = _bell_sound(_ts, 1., 0.1)  # compile
 
 
-del _, _ts
 
+loadTime = _time.time() - _load_begin
 
-bell = Bell()
-harmonica = Harmonica()
-
+del _, _ts, _load_begin
 
 # %% __main__
 if __name__ == '__main__':
     import sys
 
-    app = _App()
-    sys.exit(app((0, 0)))
+    try:
+        instrument = sys.argv[1]
+    except IndexError:
+        instrument = 'harmonica'
+
+    app = Synther(loadTime, instrument)
+
+    sys.exit(app(deviceid=0))
