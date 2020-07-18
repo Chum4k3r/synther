@@ -327,9 +327,9 @@ class Synther(Synthesizer):
 
     def __call__(self, deviceid: list = _sd.default.device,
                  dtype: _np.dtype or str = 'float32', **kwargs):
-        from platform import system
-        if system() == 'Windows':
-            kwargs['extra_settings'] = _sd.WasapiSettings(True)
+        # from platform import system
+        # if system() == 'Windows':
+            # kwargs['extra_settings'] = _sd.WasapiSettings(True)
 
         with _sd.OutputStream(self.samplerate, self.blocksize, deviceid,
                               self.nchannels, dtype, latency='low', callback=self.callback,
