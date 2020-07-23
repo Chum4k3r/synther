@@ -10,6 +10,7 @@ Created on Sat Jul 11 23:18:07 2020
 
 import numpy as _np
 import numba as _nb
+from numba.experimental import jitclass as _jitclass
 import multiprocessing as _mp
 import sounddevice as _sd
 # import soundcard as _sc
@@ -143,8 +144,6 @@ class Note:
                 '': 0,
                 'b': -1}
 
-    _octaveRange = range(9)
-
     def __init__(self, name: str, instrument: Instrument, timeOn: float):
         """
         Represent a note being played, have a frequency and a name.
@@ -168,7 +167,7 @@ class Note:
         self.timeOn = timeOn  # time started
         self.timeOff: float = 0.0  # time stopped
         self.freq: float = self._get_note_freq(self.name)
-        self._finished = _mp.Event()
+        self.finished = False
         return
 
     def __repr__(self):
@@ -191,19 +190,6 @@ class Note:
         totalDemitones += self._sofDict[sof]
 
         return _calc_note_freq(totalDemitones)
-
-    @property
-    def finished(self):
-        """Wether the note is finished or not."""
-        return self._finished.is_set()
-
-    @finished.setter
-    def finished(self, tf):
-        if not tf:
-            self._finished.clear()
-        else:
-            self._finished.set()
-        return
 
 
 class Bell(Instrument):
@@ -387,13 +373,13 @@ class Synthesizer:
 _ts = _np.linspace(0, 64/44100, 64)  # a time interval
 
 
-@_nb.njit
+@_nb.njit(cache=True)
 def _omega(freq: float) -> float:
     """Return the angular frequency in rad/s for a given `freq` in Hertz."""
     return 2*_np.pi*freq
 
 
-@_nb.njit(parallel=True)
+@_nb.njit(cache=True)
 def oscilator(oscType: str, freq: float, timeSpace: _np.ndarray,
               LFOfreq: float = 0., LFOamp: float = 0.) -> _np.ndarray:
     """
@@ -467,7 +453,7 @@ _ = oscilator('sawtooth', _np.pi, _ts)  # compile on instrument sound
 _ = oscilator('noise', 0., _ts)  # compile on instrument sound
 
 
-@_nb.njit
+@_nb.njit(cache=True)
 def _calc_note_freq(semiDiff: int, refFreq: float = 16.3516,
                     semiRatio: float = 2**(1/12)) -> float:
     """Return the frequency of a note based on semitone difference."""
@@ -477,7 +463,7 @@ def _calc_note_freq(semiDiff: int, refFreq: float = 16.3516,
 _ = _calc_note_freq(1)  # compile
 
 
-@_nb.njit
+@_nb.njit(cache=True, parallel=True)
 def _envelope_amplitude(atkTime: float, decTime: float, relTime: float,
                         atkAmp: float, susAmp: float, timeSpace: _np.ndarray,
                         timeOn: float, timeOff: float):
@@ -540,7 +526,7 @@ def _envelope_amplitude(atkTime: float, decTime: float, relTime: float,
 _ = _envelope_amplitude(0.1, 0.1, 0.1, 1., 0.8, _ts, 0.02, 0.)  # compile
 
 
-@_nb.njit(parallel=True)
+@_nb.njit(parallel=True, cache=True)
 def _harmonica_sound(timeSpace: _np.ndarray, freq: float, timeOn: float):
     """Compiled function to generate a Harmonica sound based on wave addition."""
     som = (1. * oscilator('warmsaw', 0.5*freq, timeSpace, 5., 0.005)
@@ -554,7 +540,7 @@ def _harmonica_sound(timeSpace: _np.ndarray, freq: float, timeOn: float):
 _ = _harmonica_sound(_ts, 1., 0.1)  # compile
 
 
-@_nb.njit(parallel=True)
+@_nb.njit(parallel=True, cache=True)
 def _bell_sound(timeSpace: _np.ndarray, freq: float, timeOn: float):
     """Compiled function to generate a Bell sound based on wave addition."""
     som = (1. * oscilator('sine', 2*freq, timeSpace)
@@ -623,7 +609,7 @@ class Synther(Synthesizer):
                     _sd.sleep(self.msPF)
                     if self.stopStream.is_set():
                         break
-                    print(self.loop_string(stream), end='\r')
+                    print(self.loop_string(len(self.playingNotes), stream.cpu_load), end='\r')
                 keys.join()
 
         self.finished.wait()
@@ -648,8 +634,8 @@ Use ESC to quit.
 """
         return s
 
-    def loop_string(self, stream):
-        s = f'\rNotes playing: {len(self.playingNotes)}. CPU usage: {stream.cpu_load * 100:.2f}%{self.no_key: <12}'
+    def loop_string(self, notesPlaying, cpuLoad):
+        s = f'\rNotes playing: {notesPlaying}. CPU usage: {cpuLoad * 100:.2f}%{self.no_key: <12}'
         return s
 
     def callback(self, outdata, frames, stime, status):
@@ -702,4 +688,4 @@ if __name__ == '__main__':
 
     synther = Synther(loadTime, instrument)
 
-    sys.exit(synther(deviceid=10))
+    sys.exit(synther(deviceid=0))
