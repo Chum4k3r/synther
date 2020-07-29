@@ -23,6 +23,9 @@ __all__ = ['Synthesizer', 'Envelope', 'Note', 'Instrument', 'oscilator']
 
 loadTime = _time.time()
 
+_f32L = _nb.types.ListType(_nb.types.float32)
+_utf8L = _nb.types.ListType(_nb.types.unicode_type)
+
 
 # %% API
 
@@ -93,18 +96,23 @@ class Envelope:
 class Instrument:
     """Instrument interface class. Must be subclassed."""
 
-    _instance = None
+    # _instance = None
 
-    def __init__(self, level: float, envelope: Envelope):
-        self.level = level
+    def __init__(self, amplitude: float, envelope: Envelope):
+        self.amplitude = amplitude
         self.envelope = envelope
+        self.amps = _nb.typed.List(lsttype=_f32L)
+        self.types = _nb.typed.List(lsttype=_utf8L)
+        self.harms = _nb.typed.List(lsttype=_f32L)
+        self.lfoamps = _nb.typed.List(lsttype=_f32L)
+        self.lfofreqs = _nb.typed.List(lsttype=_f32L)
         return
 
-    def __new__(cls):
-        """Singleton class."""
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
+    # def __new__(cls):
+    #     """Singleton class."""
+    #     if cls._instance is None:
+    #         cls._instance = super().__new__(cls)
+    #     return cls._instance
 
     def sound(self, timeSpace, note):
         """
@@ -124,8 +132,22 @@ class Instrument:
         None.
 
         """
-        pass
+        envelope = self.envelope.amplitude(timeSpace, note.timeOn, note.timeOff)
+        if envelope.all() <= 0.0:
+            note.finished = True
+        sound = _instrument_oscilator(self.amps, self.types, self.harms,
+                                      self.lfofreqs, self.lfoamps,
+                                      timeSpace, note.freq)
+        return self.amplitude * envelope * sound
 
+    def add_oscilator(self, amp: float, otype: str, harm: float,
+                      lfoamp: float = 0.0, lfofreq: float = 0.0):
+        self.amps.append(amp)
+        self.types.append(otype)
+        self.harms.append(harm)
+        self.lfoamps.append(lfoamp)
+        self.lfofreqs.append(lfofreq)
+        return
 
 class Note:
     """Notes interface."""
@@ -193,69 +215,31 @@ class Note:
 
 
 class Bell(Instrument):
-    """A Bell."""
+    """Another Bell."""
 
-    def __init__(self, level: float = 0.8):
+    def __init__(self, amplitude: float = 0.8):
         """Bell like sounding instrument."""
-        envelope = Envelope(0.01, 1., 1., 1., 0.)
-        super().__init__(level, envelope)
+        envelope = Envelope(0.01, 0.8, 0.8, 0.8, 0.)
+        super().__init__(amplitude, envelope)
+        self.add_oscilator(1., 'sine', 1.)
+        self.add_oscilator(0.5, 'sine', 3.)
+        self.add_oscilator(0.25, 'sine', 4.)
         return
-
-    def sound(self, timeSpace: _np.ndarray, note: Note) -> _np.ndarray:
-        """
-        Create the samples of a bell sound for a given `timeSpace` and `note`.
-
-        Parameters
-        ----------
-        timeSpace : _np.ndarray
-            DESCRIPTION.
-        note : Note
-            DESCRIPTION.
-
-        Returns
-        -------
-        TYPE
-            DESCRIPTION.
-
-        """
-        amplitude = self.envelope.amplitude(timeSpace, note.timeOn, note.timeOff)
-        if amplitude.all() <= 0.0:
-            note.finished = True
-        sound = _bell_sound(timeSpace, note.freq, note.timeOn)
-        return self.level * amplitude * sound
 
 
 class Harmonica(Instrument):
     """A Harmonica."""
 
-    def __init__(self, level: float = 0.6):
+    def __init__(self, amplitude: float = 0.6):
         """Harmonica like sounding instrument."""
         envelope = Envelope(0.1, 0.05, 0.1, 1., 0.8)
-        super().__init__(level, envelope)
+        super().__init__(amplitude, envelope)
+        self.add_oscilator(1., 'warmsaw', 1.)
+        self.add_oscilator(0.5, 'square', 2.)
+        self.add_oscilator(0.25, 'square', 3.)
+        self.add_oscilator(0.15, 'square', 4.)
+        self.add_oscilator(0.05, 'noise', 0.)
         return
-
-    def sound(self, timeSpace: _np.ndarray, note: Note) -> _np.ndarray:
-        """
-        Create the smaples of a harmonica like sounding instrument.
-
-        Parameters
-        ----------
-        timeSpace : _np.ndarray
-            DESCRIPTION.
-        note : Note
-            DESCRIPTION.
-
-        Returns
-        -------
-        TYPE
-            DESCRIPTION.
-
-        """
-        amplitude = self.envelope.amplitude(timeSpace, note.timeOn, note.timeOff)
-        if amplitude.all() <= 0.0:
-            note.finished = True
-        sound = _harmonica_sound(timeSpace, note.freq, note.timeOn)
-        return self.level * amplitude * sound
 
 
 class Synthesizer:
@@ -445,12 +429,32 @@ def oscilator(oscType: str, freq: float, timeSpace: _np.ndarray,
     return out
 
 
-_ = oscilator('sine', _np.pi, _ts)  # compile on instrument sound
-_ = oscilator('square', _np.pi, _ts)  # compile on instrument sound
-_ = oscilator('triangle', _np.pi, _ts)  # compile on instrument sound
-_ = oscilator('warmsaw', _np.pi, _ts)  # compile on instrument sound
-_ = oscilator('sawtooth', _np.pi, _ts)  # compile on instrument sound
+_ = oscilator('sine', 1., _ts)  # compile on instrument sound
+_ = oscilator('square', 1., _ts)  # compile on instrument sound
+_ = oscilator('triangle', 1., _ts)  # compile on instrument sound
+_ = oscilator('warmsaw', 1., _ts)  # compile on instrument sound
+_ = oscilator('sawtooth', 1., _ts)  # compile on instrument sound
 _ = oscilator('noise', 0., _ts)  # compile on instrument sound
+
+
+@_nb.njit(parallel=True, cache=True)
+def _instrument_oscilator(amps: _f32L, types: _utf8L, harms: _f32L,
+                          lfofreqs: _f32L, lfoamps: _f32L,
+                          timeSpace: _np.ndarray, freq: float) -> _np.ndarray:
+    som = _np.zeros(timeSpace.shape, dtype=_np.dtype('float32'))
+    for nop in _nb.prange(len(amps)):
+        som[:] += amps[nop] * oscilator(types[nop], harms[nop] * freq, timeSpace, lfofreqs[nop], lfoamps[nop])
+    return som
+
+_1 = _nb.typed.List(lsttype=_f32L)
+_1.append(1.)
+_1.append(1.)
+
+_t = _nb.typed.List(lsttype=_utf8L)
+_t.append('sine')
+_t.append('sine')
+
+_ = _instrument_oscilator(_1, _t, _1, _1, _1, _ts, 1.)
 
 
 @_nb.njit(cache=True)
@@ -526,32 +530,7 @@ def _envelope_amplitude(atkTime: float, decTime: float, relTime: float,
 _ = _envelope_amplitude(0.1, 0.1, 0.1, 1., 0.8, _ts, 0.02, 0.)  # compile
 
 
-@_nb.njit(parallel=True, cache=True)
-def _harmonica_sound(timeSpace: _np.ndarray, freq: float, timeOn: float):
-    """Compiled function to generate a Harmonica sound based on wave addition."""
-    som = (1. * oscilator('warmsaw', 0.5*freq, timeSpace, 5., 0.005)
-           + 0.5 * oscilator('square', freq, timeSpace - timeOn)
-           + 0.25 * oscilator('square', 1.5*freq, timeSpace - timeOn)
-           + 0.15 * oscilator('square', 3*freq, timeSpace - timeOn)
-           + 0.05 * oscilator('noise', 0., timeSpace - timeOn))
-    return som
-
-
-_ = _harmonica_sound(_ts, 1., 0.1)  # compile
-
-
-@_nb.njit(parallel=True, cache=True)
-def _bell_sound(timeSpace: _np.ndarray, freq: float, timeOn: float):
-    """Compiled function to generate a Bell sound based on wave addition."""
-    som = (1. * oscilator('sine', 2*freq, timeSpace)
-           + 0.5 * oscilator('sine', 3*freq, timeSpace)
-           + 0.25 * oscilator('sine', 4*freq, timeSpace))
-    return som
-
-
-_ = _bell_sound(_ts, 1., 0.1)  # compile
-
-del _, _ts
+del _, _ts, _1, _t
 
 loadTime = _time.time() - loadTime
 
