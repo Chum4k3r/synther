@@ -5,10 +5,19 @@ Based on the video series of [One Lone Coder](https://www.youtube.com/watch?v=tg
 
 ### Install
 
-One can install directly from GitHub:
+On your prefered repositories folder, and your command line interface, type:
+
 ```
-pip install git+https://github.com/Chum4k3r/synther.git
+git clone https://github.com/Chum4k3r/synther.git synther
 ```
+
+Then:
+
+```
+pip install -e synther
+```
+
+If everything goes fine, proceed to running the module.
 
 ### Running
 
