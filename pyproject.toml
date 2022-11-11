@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "synther"
+version = "0.1.0"
+description = ""
+authors = ["João Vitor Gutkoski Paes <joao.paes@dynamox.net>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.8"
+numpy = "^1.23.4"
+pynput = "^1.7.6"
+sounddevice = "^0.4.5"
+
+
+[tool.poetry.group.dev.dependencies]
+ipython = "^8.6.0"
+pytest = "^7.2.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
