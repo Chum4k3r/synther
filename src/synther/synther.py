@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import time as timing
 from statistics import mean, median
-from typing import Dict, Union
+from typing import Dict, List, Union
 from multiprocessing import Event, Queue, Process
 import numpy as np
 from pynput import keyboard
@@ -33,6 +33,7 @@ class Synther:
         self.num_buffers = num_buffers
         self.buffer_duration = buffer_size / samplerate
         self.num_samples = num_buffers * buffer_size
+        self.samples_duration = self.buffer_duration * self.num_buffers
         self.app_start = -1.
         self.active_notes: Dict[str, Note] = {}
         self.active = Event()
@@ -63,7 +64,6 @@ class Synther:
         self.app_start = timing.perf_counter()
         processing_times = []
 
-        last_timestamp = 0.
 
         audio_loop_kwargs = dict(
             samplerate=self.samplerate,
@@ -72,9 +72,11 @@ class Synther:
             queue=self.q,
             active=self.active
         )
-        process = Process(name="SyntherAudioProcess", target=self.audio_loop, kwargs=audio_loop_kwargs)
 
+        process = Process(name="SyntherAudioProcess", target=self.audio_loop, kwargs=audio_loop_kwargs)
         process.start()
+
+        last_elapsed = self.elapsed_time()
         with keyboard.Listener(on_press=self.key_press,
                                on_release=self.key_release,
                                suppress=True) as keys:
@@ -84,20 +86,23 @@ class Synther:
             self.active.set()
             while self.active.is_set():
                 elapsed = self.elapsed_time()
-
-                if elapsed < last_timestamp:
-                    timing.sleep(last_timestamp - elapsed - self.buffer_duration)
+                if (delta_t := elapsed - last_elapsed) < self.samples_duration:
+                    timing.sleep(self.samples_duration - delta_t)
+                    elapsed = self.elapsed_time()
 
                 process_start = timing.perf_counter()
                 sound = self.get_samples(elapsed)
-                [self.q.put_nowait(sound[n:self.buffer_size:(n+1)*self.buffer_size]) for n in range(self.num_buffers)]
+                [self.q.put_nowait(sound[n*self.buffer_size:(n+1)*self.buffer_size, :]) for n in range(self.num_buffers)]
                 process_duration = timing.perf_counter() - process_start
 
                 processing_times.append(process_duration)
                 print(self.loop_string(len(self.active_notes), process_duration), end='\r')
 
+                last_elapsed = elapsed
+
             keys.join()
         process.join()
+        process.close()
 
         while True:
             try:
@@ -111,7 +116,7 @@ class Synther:
         print(f"{mean(processing_times)=}")
         print(f"{min(processing_times)=}")
         print(f"{max(processing_times)=}")
-        print(f"{self.buffer_duration=}")
+        print(f"{self.samples_duration=}")
 
         return
 
@@ -127,7 +132,9 @@ class Synther:
                 finished_notes.append(name)
         self._safe_play_notes.set()
 
-        sound /= np.max(np.abs(sound), axis=0)
+        maxabs = np.max(np.abs(sound), axis=0)
+        sound[:, 0] /= (maxabs[0] if maxabs[0] > 0 else 1)
+        sound[:, 1] /= (maxabs[1] if maxabs[1] > 0 else 1)
 
         [self.active_notes.pop(note) for note in finished_notes]
         return sound
@@ -150,8 +157,10 @@ Use ESC to quit.
     def audio_loop(self, samplerate: int, buffer_size: int, device: int, queue: Queue, active: Event) -> None:
 
         finished = Event()
-        statuses = []
-        def callback(outdata, frames, stime, status):
+        statuses: List[sd.CallbackFlags] = []
+
+        def callback(outdata: np.ndarray, frames: int, stime: object, status: sd.CallbackFlags):
+            outdata.fill(0)
             if status:
                 statuses.append(status)
             try:
